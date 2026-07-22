@@ -3,6 +3,7 @@
 
 import os
 import time
+import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.firefox.options import Options
@@ -18,6 +19,7 @@ BROWSER = "/usr/local/bin/geckodriver"
 fetch_link = "https://www.instagram.com/direct/t/116177586439207/"
 
 os.makedirs(out_dir, exist_ok=True)
+
 
 
 options = Options()

@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 input_dir = "/home/ajai-krishna/Documents/Instagram_posts_climate-change/links/Outputs/html_parsed_links/"
 output_dir = "/home/ajai-krishna/Documents/Instagram_posts_climate-change/links/Outputs/posts"
 
-
+_username_counts = {}  
 
 
 def _extract_bracket_json(html, key_marker):
@@ -67,7 +67,7 @@ def _ytdlp_fallback(page_url, folder, vid_i):
     cmd = [
         "yt-dlp",
         "--cookies-from-browser",
-        "firefox:/home/ajai-krishna/setups/tor-browser-linux-x86_64-15.0.17/tor-browser/Browser/TorBrowser/Data/Browser/profile.default",
+        "firefox",
         "-P", folder,
         page_url
     ]
@@ -175,24 +175,21 @@ def process_file(path):
         html = f.read()
 
     m = re.search(r'"username":"([^"]+)"', html)
-    username = m.group(1) if m else "unknown_user"
+    raw_username = m.group(1) if m else "unknown_user"
+    count = _username_counts.get(raw_username, 0) + 1
+    _username_counts[raw_username] = count
+    username = raw_username if count == 1 else f"{raw_username}_{count}"
+
     folder = os.path.join(output_dir, username)
     os.makedirs(folder, exist_ok=True)
 
     soup = BeautifulSoup(html, "html.parser")
-
-    page_url_tag = soup.find("meta", property="og:url")   # <-- order-proof
+    page_url_tag = soup.find("meta", property="og:url")
     page_url = page_url_tag.get("content") if page_url_tag else None
-    
-    
-    if not page_url:                                      # <-- new fallback
+    if not page_url:
         canonical = soup.find("link", rel="canonical")
         if canonical and canonical.get("href"):
-                page_url = canonical["href"]
-                print(f"og:url missing, used canonical link instead: {page_url}")
-
-    if not page_url:
-        print(f"WARNING: no og:url or canonical found in {path}, yt-dlp fallback will be dead")
+            page_url = canonical["href"]
 
     meta = soup.find("meta", attrs={"name": "description"})
     if meta:
@@ -201,22 +198,21 @@ def process_file(path):
         if cm:
             with open(os.path.join(folder, "caption.txt"), "w", encoding="utf-8") as f:
                 f.write(cm.group(1))
-            print("Saved: caption.txt")
 
     media = get_post_media(html)
-    print(f"{path}: found {len(media)} real post media item(s)")
 
     img_i = vid_i = 0
     saved_count = 0
+    errors = []                              # <-- collect per-item failure reasons
+
     for url, is_video in media:
         if is_video and url.startswith("blob:"):
             vid_i += 1
             ok = _video_via_bs4_ytdlp(html, page_url, folder, vid_i)
             if ok:
                 saved_count += 1
-                print(f"Saved via yt-dlp: video_{vid_i}")
             else:
-                print(f"Failed: {url} (blob, yt-dlp couldn't fetch)")
+                errors.append(f"yt-dlp failed for video_{vid_i}")
             continue
 
         try:
@@ -230,15 +226,15 @@ def process_file(path):
                     fname = os.path.join(folder, f"image_{img_i}.jpg")
                 with open(fname, "wb") as f:
                     f.write(resp.content)
-                print(f"Saved: {fname}")
                 saved_count += 1
             else:
-                print(f"Failed (status {resp.status_code}): {url}")
+                errors.append(f"status {resp.status_code}: {url}")
         except Exception as e:
-            print(f"Failed: {url}\n{e}")
+            errors.append(f"{type(e).__name__}: {e}")   # <-- real error text captured
 
     if len(media) == 0:
         status = "failed"
+        errors.append("no media found in post")
     elif saved_count == len(media):
         status = "success"
     elif saved_count == 0:
@@ -246,7 +242,8 @@ def process_file(path):
     else:
         status = "partial"
 
-    return username, status
+    remarks = "; ".join(errors) if errors else ""
+    return username, status, remarks          # <-- remarks now returned
 
 
 if __name__ == "__main__":
@@ -258,20 +255,23 @@ if __name__ == "__main__":
 
     files = [os.path.join(input_dir, file) for file in os.listdir(input_dir)]
     records = []
+    # folder_list = []
+    # folder_count = 0
 
     for file in files:
         href_file_name = os.path.splitext(os.path.basename(file))[0]
         try:
-            username, status = process_file(file)   # real status from download counts
+            username, status, remarks = process_file(file)
         except Exception as e:
             print(f"Failed processing {href_file_name}: {e}")
-            username, status = None, "failed"        # crash before any download = failed
-
+            username, status, remarks = None, "failed", f"{type(e).__name__}: {e}"      # crash before any download = failed
+    
         records.append({
-            "href_file_name": href_file_name,
-            "Folder_name": username,
-            "Status": status
-        })
+                "href_file_name": href_file_name,
+                "Folder_name": username,
+                "Final_Status": status,
+                "Remarks": remarks
+            })
 
     df = pd.DataFrame(records)
     df["_n"] = df["href_file_name"].str.extract(r"(\d+)").astype(int)
@@ -279,11 +279,4 @@ if __name__ == "__main__":
     df.to_csv(log_path, index=False)          # <-- missing line, add back
     print(f"Log saved: {log_path}")
             
-        # with open(file, "r", encoding="utf-8") as f:
-        #     soup = BeautifulSoup(f.read(), "html.parser") 
-        # process_file(file)
-    
-    # file = os.path(input_dir)
-    # #files = sorted(os.path.join(input_dir, f) for f in os.listdir(input_dir))
-    # for path in file:
-    #     process_file(path)
+       
